@@ -10,8 +10,10 @@ struct CanvasView: View {
     @State private var holding = false
     @State private var compare = Compare.off
     @State private var split = 0.5 // the divider, as a fraction of the width
-    @State private var zoom = 1.0, lastZoom = 1.0
-    @State private var pan = CGSize.zero, lastPan = CGSize.zero
+    @State private var zoom = 1.0
+    @State private var lastZoom = 1.0
+    @State private var pan = CGSize.zero
+    @State private var lastPan = CGSize.zero
 
     var body: some View {
         // The photo runs under the navigation bar; the labels over it do not.
