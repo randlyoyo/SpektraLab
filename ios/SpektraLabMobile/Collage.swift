@@ -17,6 +17,7 @@ struct CollageTemplate {
             (0..<k).map { CGRect(x: a.minX, y: a.minY + a.height * Double($0) / Double(k), width: a.width, height: a.height / Double(k)) }
         }
         func grid(_ k: Int, _ a: CGRect = full) -> [CGRect] {
+            guard k > 0 else { return [] }
             let c = Int(Double(k).squareRoot().rounded(.up)), r = (k + c - 1) / c
             return (0..<k).map { i in
                 // The last row's cells widen to fill it.
@@ -65,17 +66,22 @@ struct CollageStyle {
 }
 
 struct CollageView: View {
-    let photos: [Photo]
     @Environment(Library.self) private var lib
     @Environment(\.dismiss) private var dismiss
-    @State private var order: [Photo] = []
+    // Filled at init, not in .task: an empty first frame asked for a layout of
+    // zero photos and divided by zero.
+    @State private var order: [Photo]
     @State private var previews: [String: UIImage] = [:] // id → cropped print, for the screen
     @State private var style = CollageStyle()
     @State private var picked: Int?
     @State private var tab = 0
     @State private var exporting = false
 
-    private var templates: [CollageTemplate] { CollageTemplate.all(order.count) }
+    init(photos: [Photo]) {
+        _order = State(initialValue: photos)
+    }
+
+    private var templates: [CollageTemplate] { CollageTemplate.all(max(order.count, 2)) }
     private var cells: [CGRect] { templates[min(style.template, templates.count - 1)].cells }
 
     var body: some View {
@@ -108,10 +114,7 @@ struct CollageView: View {
             }
             .disabled(exporting)
         }
-        .task {
-            order = photos
-            await loadPreviews()
-        }
+        .task { await loadPreviews() }
     }
 
     private func cell(_ i: Int, frame: CGRect, scale: Double) -> some View {

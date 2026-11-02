@@ -21,7 +21,21 @@ import SwiftUI
 /// Observable state is only ever set on the main queue.
 @Observable
 final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCapturePhotoCaptureDelegate {
-    struct Lens: Identifiable { let id: String; let label: String; let device: AVCaptureDevice }
+    /// A zoom stop: a physical lens at `zoom` (1, or a sensor crop such as 2× on the main camera).
+    struct Lens: Identifiable {
+        let id: String
+        let factor: Double // relative to the main camera, for the label
+        let device: AVCaptureDevice
+        let zoom: CGFloat
+        var label: String {
+            let f = factor == factor.rounded() ? "\(Int(factor))" : String(format: "%.1f", factor).replacingOccurrences(of: "0.", with: ".")
+            return f + "×"
+        }
+    }
+
+    /// The front camera's two framings, as the Camera app: a slightly
+    /// cropped default, and the whole sensor.
+    static let frontCroppedZoom: CGFloat = 1.2
 
     @ObservationIgnored let session = AVCaptureSession()
     @ObservationIgnored private let photoOutput = AVCapturePhotoOutput()
@@ -43,6 +57,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private(set) var format = "" // "ProRAW", "RAW" or "HEIC" for the current lens
     private(set) var lenses: [Lens] = [] // the back lenses, widest first
     private(set) var lensID = ""
+    private(set) var frontWide = false
     private(set) var front = false
     private(set) var flashModes: [AVCaptureDevice.FlashMode] = []
     private(set) var biasRange: ClosedRange<Float> = -2...2
@@ -79,9 +94,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
         let lenses = Self.backLenses()
         DispatchQueue.main.async { self.lenses = lenses }
-        if let wide = lenses.first(where: { $0.device.deviceType == .builtInWideAngleCamera }) ?? lenses.first {
-            use(wide.device)
-        }
+        if let main = lenses.first(where: { $0.factor == 1 }) ?? lenses.first { use(main) }
     }
 
     /// The back cameras with their zoom labels, from the triple (or dual)
@@ -98,17 +111,32 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let constituents = virtual?.constituentDevices ?? []
         let wideIndex = constituents.firstIndex { $0.deviceType == .builtInWideAngleCamera } ?? 0
         let base = wideIndex < factors.count ? factors[wideIndex] : 1
-        return devices.sorted { kinds.firstIndex(of: $0.deviceType)! < kinds.firstIndex(of: $1.deviceType)! }.map { d in
+        var lenses = devices.map { d in
             let i = constituents.firstIndex { $0.deviceType == d.deviceType }
             let f = i.flatMap { $0 < factors.count ? factors[$0] / base : nil }
                 ?? (d.deviceType == .builtInUltraWideCamera ? 0.5 : d.deviceType == .builtInTelephotoCamera ? 2 : 1)
-            let label = f == f.rounded() ? "\(Int(f))" : String(format: "%.1f", f).replacingOccurrences(of: "0.", with: ".")
-            return Lens(id: d.uniqueID, label: label + "×", device: d)
+            return Lens(id: d.uniqueID, factor: f, device: d, zoom: 1)
         }
+        // The Camera app's crop stops: 2× from the main camera, 8× from the
+        // telephoto, where no lens already sits there.
+        func crop(_ target: Double, from lens: Lens?) {
+            guard let lens, lens.factor < target, !lenses.contains(where: { $0.factor == target }),
+                  lens.device.activeFormat.videoMaxZoomFactor >= target / lens.factor else { return }
+            lenses.append(Lens(id: lens.id + "@\(target)", factor: target, device: lens.device, zoom: target / lens.factor))
+        }
+        crop(2, from: lenses.first { $0.device.deviceType == .builtInWideAngleCamera })
+        crop(8, from: lenses.first { $0.device.deviceType == .builtInTelephotoCamera })
+        return lenses.sorted { $0.factor < $1.factor }
     }
 
-    /// Switch the session to `device`. On `sessionQueue`.
-    private func use(_ device: AVCaptureDevice) {
+    /// Switch the session to `lens`. On `sessionQueue`.
+    private func use(_ lens: Lens) {
+        let device = lens.device
+        defer { zoom(device, to: lens.zoom) }
+        if input?.device == device {
+            DispatchQueue.main.async { self.lensID = lens.id }
+            return
+        }
         session.beginConfiguration()
         if let input { session.removeInput(input) }
         if let next = try? AVCaptureDeviceInput(device: device), session.canAddInput(next) {
@@ -136,7 +164,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let range = device.minExposureTargetBias...device.maxExposureTargetBias
         DispatchQueue.main.async {
             self.format = format
-            self.lensID = device.uniqueID
+            self.lensID = lens.id
             self.front = device.position == .front
             self.flashModes = flashModes
             if !flashModes.contains(self.flash) { self.flash = .off }
@@ -144,17 +172,35 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
     }
 
+    private func zoom(_ device: AVCaptureDevice, to factor: CGFloat) {
+        guard (try? device.lockForConfiguration()) != nil else { return }
+        device.videoZoomFactor = min(max(1, factor), device.activeFormat.videoMaxZoomFactor)
+        device.unlockForConfiguration()
+    }
+
     func selectLens(_ lens: Lens) {
-        sessionQueue.async { self.use(lens.device) }
+        sessionQueue.async { self.use(lens) }
     }
 
     func flipCamera() {
         let toFront = !front
+        let wide = frontWide
         sessionQueue.async {
-            let device = toFront
-                ? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
-                : self.lenses.first { $0.device.deviceType == .builtInWideAngleCamera }?.device
-            if let device { self.use(device) }
+            if toFront {
+                guard let d = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else { return }
+                self.use(Lens(id: d.uniqueID, factor: 1, device: d, zoom: wide ? 1 : Self.frontCroppedZoom))
+            } else if let main = self.lenses.first(where: { $0.factor == 1 }) ?? self.lenses.first {
+                self.use(main)
+            }
+        }
+    }
+
+    /// The front camera's framing toggle: whole sensor, or the cropped default.
+    func toggleFrontWide() {
+        frontWide.toggle()
+        let wide = frontWide
+        sessionQueue.async {
+            if let d = self.input?.device, d.position == .front { self.zoom(d, to: wide ? 1 : Self.frontCroppedZoom) }
         }
     }
 
@@ -195,10 +241,10 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         var image = CIImage(cvPixelBuffer: buffer)
         // Backstop: a frame still landscape had the connection's angle not
-        // applied; turn it upright here (the other way when mirrored).
+        // applied; turn it upright here. The same way when mirrored: turning it
+        // the other way put the front camera upside down.
         if image.extent.width > image.extent.height {
-            let degrees = connection.isVideoMirrored ? -portraitAngle : portraitAngle
-            image = image.transformed(by: CGAffineTransform(rotationAngle: -degrees * .pi / 180))
+            image = image.transformed(by: CGAffineTransform(rotationAngle: -portraitAngle * .pi / 180))
             image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
         }
         lock.lock(); let cube = cube; lock.unlock()
@@ -457,21 +503,30 @@ struct CameraView: View {
                     .glass(in: Capsule())
                     .padding(.horizontal, 40)
                 }
-                HStack(spacing: 4) {
-                    if !camera.front {
+                if camera.front {
+                    // As the Camera app: the arrows widen to the whole sensor and back.
+                    Button { camera.toggleFrontWide() } label: {
+                        Image(systemName: camera.frontWide ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(camera.frontWide ? amber : .white)
+                            .frame(width: 38, height: 38)
+                    }
+                    .glass(in: Circle())
+                } else {
+                    HStack(spacing: 2) {
                         ForEach(camera.lenses) { lens in
                             Button { camera.selectLens(lens) } label: {
                                 Text(lens.label)
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(lens.id == camera.lensID ? amber : .white)
-                                    .frame(width: 38, height: 38)
+                                    .frame(width: 36, height: 38)
                             }
                         }
                     }
+                    .padding(.horizontal, 4)
+                    .glass(in: Capsule())
+                    .opacity(camera.lenses.count > 1 ? 1 : 0)
                 }
-                .padding(.horizontal, 4)
-                .glass(in: Capsule())
-                .opacity(camera.lenses.count > 1 && !camera.front ? 1 : 0)
             }
             .padding(.bottom, 10)
         }
