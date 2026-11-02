@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Flutter source, not a Python build dir (the root lib/ rule).
+!lib/
