@@ -1,10 +1,16 @@
 # SpektraLab Mobile (unofficial iOS port)
 
-The SpektraLab engine (C++ + Metal) on iPhone, with a small SwiftUI front end:
-pick a photo, choose a film and a paper, set exposure, grain and halation, save
-the print to Photos. Personal and TestFlight use; not an official SpektraLab
-build. Please give any public build its own name and icon (see the top-level
-README, "Trademark").
+The SpektraLab engine (C++ + Metal) on iPhone, with a native SwiftUI front end.
+Import several photos and pick a film and a paper for each. Set exposure,
+grain and halation. Compare against the original by holding the photo, with
+the 原图 toggle, or with a split slider. Edit several selected photos at once,
+sync chosen settings from one photo to others, copy and paste settings, and
+export a batch to Photos. For personal and TestFlight use; this is not an
+official SpektraLab build. Please give any public build its own name and icon
+(see the top-level README, "Trademark").
+
+The layout is designed first in the Flutter prototype in `../mobile`
+(`flutter run -d chrome`), which runs on a PC without a Mac.
 
 ## Build without a Mac
 
@@ -31,7 +37,8 @@ Re-run `engine/build.sh ios` whenever `engine/resources/` or the shaders change.
 
 - Input is scaled to 12 MP (`Engine.maxInputPixels`) to stay under the
   phone's memory limit.
-- One photo at a time. No crop, Film Edge, Date Back or batch.
+- Settings and imported photos are not kept after the app quits.
+- There is no crop, Film Edge or Date Back.
 - Output is Display P3 HEIC.
 
 ## Licences

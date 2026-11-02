@@ -27,6 +27,9 @@ targets:
         buildPhase: resources
       - path: ../modern_UI/Spektrafilm/Spektrafilm/Resources/StockCatalog.json
         buildPhase: resources
+      - path: ../modern_UI/Spektrafilm/Spektrafilm/Resources/FilmCovers
+        type: folder
+        buildPhase: resources
       # The engine, as the Mac target compiles it (Tools/gen-project.py):
       # every Mac translation unit, none of the Windows ones.
       - path: ../engine/src/core
@@ -41,7 +44,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: SpektraLab Mobile
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Saves your prints to Photos.
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: 保存冲印好的照片到相册
         SWIFT_OBJC_BRIDGING_HEADER: SpektraLabMobile/Bridging-Header.h
         CLANG_CXX_LANGUAGE_STANDARD: c++20
         CLANG_CXX_LIBRARY: libc++
