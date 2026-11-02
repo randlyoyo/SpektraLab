@@ -56,3 +56,6 @@ targets:
         CLANG_ENABLE_OBJC_ARC: NO
         # The engine's C++ at -O2 in Debug too, as on the Mac (12x slower at -O0).
         GCC_OPTIMIZATION_LEVEL: "2"
+        # As the Mac project: a warning, not XcodeGen's YES_ERROR, which fails two
+        # C++-returning helpers inside engine.cpp's extern "C" block.
+        GCC_WARN_ABOUT_RETURN_TYPE: YES
