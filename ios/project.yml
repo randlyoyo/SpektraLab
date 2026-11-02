@@ -42,6 +42,7 @@ targets:
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon # drawn by tools/make_icon.py
         INFOPLIST_KEY_CFBundleDisplayName: SpektraLab Mobile
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: 保存冲印好的照片到相册
