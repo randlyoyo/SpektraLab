@@ -6,6 +6,7 @@
 #   engine/build.sh dylib      the shared library the ctypes parity harness loads
 #   engine/build.sh tests      the setup/schema dump drivers
 #   engine/build.sh metallib   just the kernels
+#   engine/build.sh ios        the iPhone kernels + resources into ios/
 #
 # bash, and arrays throughout, because the repository path contains a space
 # ("Summer 2026") and every unquoted expansion of a path list is a build that
@@ -46,6 +47,10 @@ math_flags=(-fmetal-math-mode=safe -fmetal-math-fp32-functions=precise)
 # stamp drifts.
 MACOS_MIN=15.0
 target_flags=(-mmacos-version-min="$MACOS_MIN")
+# `build.sh ios` swaps these three for the iPhone build (ios/project.yml).
+SDK=macosx
+MIN_OS=$MACOS_MIN
+metallib_dest="$here/resources"
 
 sources=()
 collect_sources() {
@@ -74,9 +79,9 @@ collect_sources() {
 # not stamp a UUID or a timestamp, and this comment is the only record of it.
 check_metallib_target() {
   local major
-  major=$(xcrun -sdk macosx metal-readobj --file-headers "$1" | awk '/PlatformMajor:/ {print $2; exit}')
-  if [[ "$major" != "${MACOS_MIN%%.*}" ]]; then
-    echo "build.sh: $1 targets macOS $major, not $MACOS_MIN -- it would not load on older Macs" >&2
+  major=$(xcrun -sdk "$SDK" metal-readobj --file-headers "$1" | awk '/PlatformMajor:/ {print $2; exit}')
+  if [[ "$major" != "${MIN_OS%%.*}" ]]; then
+    echo "build.sh: $1 targets $SDK $major, not $MIN_OS -- it would not load on older devices" >&2
     exit 1
   fi
 }
@@ -86,15 +91,15 @@ build_metallib() {
   shopt -s nullglob
   for m in "$here"/src/shaders/*.metal; do
     air="$out/$(basename "$m" .metal).air"
-    xcrun -sdk macosx metal "${math_flags[@]}" "${target_flags[@]}" -Werror -c "$m" -o "$air"
+    xcrun -sdk "$SDK" metal "${math_flags[@]}" "${target_flags[@]}" -Werror -c "$m" -o "$air"
     airs+=("$air")
   done
   shopt -u nullglob
   if [[ ${#airs[@]} -eq 0 ]]; then echo "no shaders yet"; return 0; fi
-  xcrun -sdk macosx metallib "${airs[@]}" -o "$out/spektrafilm.metallib"
+  xcrun -sdk "$SDK" metallib "${airs[@]}" -o "$out/spektrafilm.metallib"
   check_metallib_target "$out/spektrafilm.metallib"
-  cp "$out/spektrafilm.metallib" "$here/resources/spektrafilm.metallib"
-  echo "metallib   -> $here/resources/spektrafilm.metallib"
+  if [[ "$metallib_dest" != "$out" ]]; then cp "$out/spektrafilm.metallib" "$metallib_dest/spektrafilm.metallib"; fi
+  echo "metallib   -> $metallib_dest/spektrafilm.metallib"
 }
 
 objects=()
@@ -142,8 +147,8 @@ build_tests() {
 # target sets `MTL_FAST_MATH = YES` for its own canvas shader, and inheriting
 # that for the engine's kernels is exactly RFC-014 §5.1 trap 1. Building it
 # here keeps the math flags in one place, next to the reason for them.
+app="$here/../modern_UI/Spektrafilm/Spektrafilm/Resources/engine"
 bundle_resources() {
-  local app="$here/../modern_UI/Spektrafilm/Spektrafilm/Resources/engine"
   if [[ ! -f "$here/resources/spektrafilm_constants.bin" ]]; then
     # `engine/resources/` is *tracked* in this repository, so this means the
     # checkout is damaged -- not that anything needs baking. Re-baking needs the
@@ -174,6 +179,12 @@ case "${1:-all}" in
   dylib)    build_metallib; build_dylib ;;
   tests)    build_tests ;;
   bundle)   build_metallib; bundle_resources ;;
+  # The iPhone app's kernels: same math flags, iphoneos SDK, kept out of
+  # resources/ so they never overwrite the Mac metallib.
+  ios)      SDK=iphoneos; MIN_OS=18.0; target_flags=(-mios-version-min="$MIN_OS")
+            out="$out/ios"; mkdir -p "$out"; metallib_dest="$out"
+            app="$here/../ios/SpektraLabMobile/Resources/engine"
+            build_metallib; bundle_resources; cp "$out/spektrafilm.metallib" "$app/" ;;
   all)      build_metallib; build_lib; build_dylib; build_tests; bundle_resources ;;
-  *) echo "usage: build.sh [all|lib|dylib|tests|metallib|bundle]" >&2; exit 2 ;;
+  *) echo "usage: build.sh [all|lib|dylib|tests|metallib|bundle|ios]" >&2; exit 2 ;;
 esac
