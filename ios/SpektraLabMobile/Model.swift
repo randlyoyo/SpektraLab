@@ -101,6 +101,7 @@ final class Library {
     var currentPrint: UIImage?
     var currentOriginal: UIImage?
     var showOriginal = false // the canvas's 原图 button
+    var lastCaptured: Photo? // shown when the camera closes
 
     var busy = false
     var exporting: (done: Int, total: Int)?
@@ -169,6 +170,14 @@ final class Library {
             photos.append(Photo(id: file.id, thumb: PhotoStore.thumbnail(file.url)))
         }
         if current == nil, let first = photos.first { show(first) }
+    }
+
+    /// A photo the camera just took, set to the film it was shot on.
+    func addCaptured(_ url: URL, settings: Settings) {
+        let p = Photo(id: url.deletingPathExtension().lastPathComponent, thumb: PhotoStore.thumbnail(url))
+        p.settings = settings
+        photos.append(p)
+        lastCaptured = p
     }
 
     func show(_ p: Photo) {

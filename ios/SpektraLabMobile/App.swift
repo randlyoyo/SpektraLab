@@ -22,6 +22,7 @@ struct SpektraLabMobileApp: App {
 struct EditorView: View {
     @Environment(Library.self) private var lib
     @State private var syncing = false
+    @State private var shooting = false
 
     var body: some View {
         @Bindable var lib = lib
@@ -37,6 +38,12 @@ struct EditorView: View {
             .toolbar { toolbar }
             .onChange(of: lib.picked) { Task { await lib.importPicked() } }
             .sheet(isPresented: $syncing) { SyncSheet() }
+            .fullScreenCover(isPresented: $shooting, onDismiss: {
+                if let p = lib.lastCaptured {
+                    lib.lastCaptured = nil
+                    lib.show(p)
+                }
+            }) { CameraView() }
             .sheet(isPresented: .constant(lib.exporting != nil)) { ExportSheet() }
             .overlay(alignment: .top) {
                 if let toast = lib.toast {
@@ -54,7 +61,7 @@ struct EditorView: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         @Bindable var lib = lib
-        ToolbarItem(placement: .topBarLeading) {
+        ToolbarItemGroup(placement: .topBarLeading) {
             if lib.selecting {
                 Button("全选", action: lib.selectAll).disabled(lib.photos.count < 2)
             } else {
@@ -63,6 +70,7 @@ struct EditorView: View {
                     Image(systemName: "plus")
                 }
                 .disabled(lib.busy)
+                Button { shooting = true } label: { Image(systemName: "camera") }
             }
         }
         ToolbarItem(placement: .principal) {

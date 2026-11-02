@@ -45,6 +45,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: SpektraLab Mobile
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: 保存冲印好的照片到相册
+        INFOPLIST_KEY_NSCameraUsageDescription: 用胶片取景器拍照
         SWIFT_OBJC_BRIDGING_HEADER: SpektraLabMobile/Bridging-Header.h
         CLANG_CXX_LANGUAGE_STANDARD: c++20
         CLANG_CXX_LIBRARY: libc++

@@ -262,6 +262,85 @@ actor Engine {
         return url
     }
 
+    /// The film and paper of `settings` as a 3D LUT for the camera's live view:
+    /// `size`³ RGBA float32 entries, red fastest, input and output both ROMM
+    /// RGB (ProPhoto, γ1.8) as `CIColorCubeWithColorSpace` takes them.
+    ///
+    /// Made by printing a picture of the LUT's own grid: each entry a block of
+    /// pixels, read back at the block's centre. Everything spatial (grain,
+    /// halation, glare, lens blur) and the auto exposure are off, so a block
+    /// prints as its colour alone; the frame is declared 200 mm wide so the
+    /// remaining diffusion stays well inside a block. The open photo is
+    /// closed: the next edit reopens it.
+    func bakeLUT(_ settings: Settings, size n: Int = 33) throws -> Data {
+        let engine = try started()
+        if let session { spk_session_release(session); self.session = nil; openID = nil; lastPrintKey = nil }
+
+        let block = 6, width = n * n * block, height = n * block
+        // ROMM decoding, so the grid is even in the encoded values the cube is indexed by.
+        func linear(_ i: Int) -> Float {
+            let e = Float(i) / Float(n - 1)
+            return e < 16.0 / 512.0 ? e / 16 : pow(e, 1.8)
+        }
+        var pixels = [Float](repeating: 0, count: width * height * 3)
+        for b in 0..<n {
+            for g in 0..<n {
+                for r in 0..<n {
+                    let x0 = (r + n * g) * block, y0 = b * block
+                    let rgb = (linear(r), linear(g), linear(b))
+                    for y in y0..<(y0 + block) {
+                        for x in x0..<(x0 + block) {
+                            let i = (y * width + x) * 3
+                            pixels[i] = rgb.0; pixels[i + 1] = rgb.1; pixels[i + 2] = rgb.2
+                        }
+                    }
+                }
+            }
+        }
+
+        var params = settings.params
+        params["auto_exposure"] = false
+        params["grain_active"] = false
+        params["halation_active"] = false
+        params["glare_active"] = false
+        params["lens_blur_um"] = 0.0
+        params["scanner_lens_blur"] = 0.0
+        params["film_format_mm"] = 200.0
+        var reply: UnsafeMutablePointer<CChar>?
+        let handle: OpaquePointer? = try json(params).withCString { delta in
+            pixels.withUnsafeBufferPointer { buf in
+                var image = spk_image(data: buf.baseAddress, width: UInt32(width), height: UInt32(height), channels: 3)
+                return spk_open(engine, &image, delta, &reply)
+            }
+        }
+        if let reply { spk_string_free(reply) }
+        guard let lutSession = handle else { throw fail(engine) }
+        defer { spk_session_release(lutSession) }
+
+        var result = spk_result()
+        guard spk_render(lutSession, "full", &result) == SPK_OK else { throw fail(engine) }
+        defer { spk_result_free(&result) }
+        guard Int(result.width) == width, Int(result.height) == height else {
+            throw EngineError(errorDescription: "LUT print is \(result.width)×\(result.height), not \(width)×\(height)")
+        }
+
+        var cube = [Float](repeating: 1, count: n * n * n * 4)
+        let stride = Int(result.row_stride_px)
+        for b in 0..<n {
+            for g in 0..<n {
+                for r in 0..<n {
+                    let x = (r + n * g) * block + block / 2, y = b * block + block / 2
+                    let px = result.rgba16 + (y * stride + x) * 4
+                    let o = ((b * n + g) * n + r) * 4
+                    cube[o] = Float(px[0]) / 65535
+                    cube[o + 1] = Float(px[1]) / 65535
+                    cube[o + 2] = Float(px[2]) / 65535
+                }
+            }
+        }
+        return cube.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+
     private func screenImage(_ image: CIImage) -> UIImage? {
         let s = min(1, Self.displayEdge / max(image.extent.width, image.extent.height))
         let scaled = image.transformed(by: .init(scaleX: s, y: s))
