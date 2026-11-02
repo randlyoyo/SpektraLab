@@ -100,6 +100,7 @@ final class Library {
     // What the canvas shows: only the current photo's images are kept decoded.
     var currentPrint: UIImage?
     var currentOriginal: UIImage?
+    var showOriginal = false // the canvas's 原图 button
 
     var busy = false
     var exporting: (done: Int, total: Int)?

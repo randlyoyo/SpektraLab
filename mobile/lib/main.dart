@@ -42,8 +42,6 @@ class App extends StatelessWidget {
 
 enum Pane { film, paper, adjust }
 
-enum Compare { off, original, split }
-
 class Editor extends StatefulWidget {
   const Editor({super.key});
 
@@ -61,10 +59,7 @@ class _EditorState extends State<Editor> {
 
   Pane pane = Pane.film;
   String filmGroup = 'all';
-  // Before/after: hold the photo for a moment, or the toggle, or the split.
-  bool holding = false;
-  Compare compare = Compare.off;
-  double split = 0.5; // the divider, as a fraction of the canvas width
+  bool showOriginal = false; // the 原图 button
 
   // One engine, one open photo; edits made while it works are coalesced.
   bool busy = false;
@@ -400,89 +395,47 @@ class _EditorState extends State<Editor> {
     }
     final print = p.print, original = p.original;
     if (print == null) return const Center(child: CupertinoActivityIndicator(radius: 14));
-    final showOriginal = original != null && (holding || compare == Compare.original);
-    final splitting = original != null && compare == Compare.split && !holding;
+    final shown = showOriginal && original != null ? original : print;
     final top = MediaQuery.paddingOf(context).top + 60;
 
-    return LayoutBuilder(builder: (context, box) {
-      return Stack(fit: StackFit.expand, children: [
-        if (splitting)
-          // Original left of the divider, print right of it. No zoom here:
-          // the divider is in screen coordinates.
-          GestureDetector(
-            onHorizontalDragUpdate: (d) =>
-                setState(() => split = (split + d.delta.dx / box.maxWidth).clamp(0.02, 0.98)),
-            onTapDown: (d) => setState(() => split = d.localPosition.dx / box.maxWidth),
-            child: Stack(fit: StackFit.expand, children: [
-              Image.memory(print, fit: BoxFit.contain, gaplessPlayback: true),
-              ClipRect(
-                clipper: _LeftOf(split),
-                child: Image.memory(original, fit: BoxFit.contain, gaplessPlayback: true),
-              ),
-              Positioned(
-                left: split * box.maxWidth - 22,
-                top: 0,
-                bottom: 0,
-                width: 44,
-                child: Stack(alignment: Alignment.center, children: [
-                  Container(width: 2, color: Colors.white),
-                  Glass(
-                    radius: 18,
-                    child: const SizedBox(
-                      width: 36,
-                      height: 36,
-                      child: Icon(CupertinoIcons.arrow_left_right, size: 16, color: kLabel),
-                    ),
-                  ),
-                ]),
-              ),
-              Positioned(left: 12, top: top, child: _chip('原图')),
-              Positioned(right: 12, top: top, child: _chip('冲印')),
-            ]),
-          )
-        else
-          GestureDetector(
-            onLongPressStart: (_) => setState(() => holding = true),
-            onLongPressEnd: (_) => setState(() => holding = false),
-            child: InteractiveViewer(
-              maxScale: 6,
-              child: Image.memory(showOriginal ? original : print, fit: BoxFit.contain, gaplessPlayback: true),
-            ),
-          ),
-        if (showOriginal) Positioned(left: 12, top: top, child: _chip('原图', highlight: true)),
-        Positioned(left: 12, bottom: 10, child: _compareButtons(enabled: original != null)),
-        Positioned(
-          right: 12,
-          bottom: 10,
-          child: busy ? _chip('冲印中', spinner: true) : _chip(p.status),
+    return Stack(fit: StackFit.expand, children: [
+      // Tap for full screen.
+      GestureDetector(
+        onTap: () => Navigator.of(context).push(PageRouteBuilder(
+          opaque: true,
+          pageBuilder: (_, __, ___) => _Fullscreen(shown),
+          transitionsBuilder: (_, a, __, child) => FadeTransition(opacity: a, child: child),
+        )),
+        child: InteractiveViewer(
+          maxScale: 6,
+          child: Image.memory(shown, fit: BoxFit.contain, gaplessPlayback: true),
         ),
-      ]);
-    });
+      ),
+      if (showOriginal && original != null) Positioned(left: 12, top: top, child: _chip('原图', highlight: true)),
+      Positioned(left: 12, bottom: 10, child: _originalButton(enabled: original != null)),
+      Positioned(
+        right: 12,
+        bottom: 10,
+        child: busy ? _chip('冲印中', spinner: true) : _chip(p.status),
+      ),
+    ]);
   }
 
-  /// Original/print toggle and the split view; tapping the active one turns it off.
-  Widget _compareButtons({required bool enabled}) {
-    Widget button(Compare mode, IconData icon, String label) {
-      final on = compare == mode;
-      return CupertinoButton(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        minimumSize: const Size(0, 34),
-        onPressed: enabled ? () => setState(() => compare = on ? Compare.off : mode) : null,
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 15, color: on ? kTint : kLabel),
-          const SizedBox(width: 5),
-          Text(label, style: TextStyle(fontSize: 12, color: on ? kTint : kLabel)),
-        ]),
-      );
-    }
-
+  /// Switches between the print and the original.
+  Widget _originalButton({required bool enabled}) {
     return Glass(
       radius: 17,
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        button(Compare.original, CupertinoIcons.eye, '原图'),
-        Container(width: 0.6, height: 18, color: Colors.white24),
-        button(Compare.split, CupertinoIcons.rectangle_split_3x1, '分屏'),
-      ]),
+      child: CupertinoButton(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        minimumSize: const Size(0, 34),
+        onPressed: enabled ? () => setState(() => showOriginal = !showOriginal) : null,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(showOriginal ? CupertinoIcons.eye_fill : CupertinoIcons.eye,
+              size: 15, color: showOriginal ? kTint : kLabel),
+          const SizedBox(width: 5),
+          Text('原图', style: TextStyle(fontSize: 12, color: showOriginal ? kTint : kLabel)),
+        ]),
+      ),
     );
   }
 
@@ -735,14 +688,40 @@ class _EditorState extends State<Editor> {
   }
 }
 
-/// The part of the canvas left of the split divider.
-class _LeftOf extends CustomClipper<Rect> {
-  final double fraction;
-  const _LeftOf(this.fraction);
+/// The photo alone on black. Tap to close; double-tap to zoom.
+class _Fullscreen extends StatefulWidget {
+  final Uint8List image;
+  const _Fullscreen(this.image);
 
   @override
-  Rect getClip(Size size) => Rect.fromLTWH(0, 0, size.width * fraction, size.height);
+  State<_Fullscreen> createState() => _FullscreenState();
+}
+
+class _FullscreenState extends State<_Fullscreen> {
+  final _zoom = TransformationController();
+  TapDownDetails? _doubleTap;
 
   @override
-  bool shouldReclip(_LeftOf old) => old.fraction != fraction;
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onTap: () => Navigator.pop(context),
+        onDoubleTapDown: (d) => _doubleTap = d,
+        onDoubleTap: () {
+          final p = _doubleTap!.localPosition;
+          _zoom.value = _zoom.value.isIdentity()
+              ? (Matrix4.identity()
+                ..translateByDouble(-p.dx * 1.5, -p.dy * 1.5, 0, 1)
+                ..scaleByDouble(2.5, 2.5, 1, 1))
+              : Matrix4.identity();
+        },
+        child: InteractiveViewer(
+          transformationController: _zoom,
+          maxScale: 6,
+          child: SizedBox.expand(child: Image.memory(widget.image, fit: BoxFit.contain)),
+        ),
+      ),
+    );
+  }
 }
