@@ -87,7 +87,7 @@ struct EditorView: View {
                 Button(lib.selecting ? "完成" : "选择", action: lib.toggleSelecting)
             }
             if !lib.selecting, let p = lib.current {
-                ShareLink(item: SharedPrint(id: p.id, settings: p.settings),
+                ShareLink(item: SharedPrint(id: p.id, settings: p.settings, crop: p.crop),
                           preview: SharePreview(Stock.byID[p.settings.film]?.name ?? "SpektraLab",
                                                 image: Image(uiImage: lib.currentPrint ?? p.thumb ?? UIImage()))) {
                     Image(systemName: "square.and.arrow.up")

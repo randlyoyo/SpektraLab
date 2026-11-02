@@ -2,7 +2,7 @@
 
 import SwiftUI
 
-enum Pane: String, CaseIterable { case film = "胶片", paper = "相纸", adjust = "调整" }
+enum Pane: String, CaseIterable { case film = "胶片", paper = "相纸", adjust = "调整", crop = "裁剪" }
 
 enum FilmGroup: String, CaseIterable {
     case all = "全部", negative = "负片", positive = "反转片", cine = "电影卷"
@@ -20,25 +20,27 @@ enum FilmGroup: String, CaseIterable {
 struct PanelView: View {
     @Environment(Library.self) private var lib
     @Binding var syncing: Bool
-    @State private var pane = Pane.film
     @State private var group = FilmGroup.all
+    @State private var collaging = false
 
     private var s: Settings { lib.current?.settings ?? Settings() }
 
     var body: some View {
+        @Bindable var lib = lib
         VStack(spacing: 0) {
             if lib.selecting { selectBar }
-            Picker("", selection: $pane) {
+            Picker("", selection: $lib.pane) {
                 ForEach(Pane.allCases, id: \.self) { Text($0.rawValue) }
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
 
             Group {
-                switch pane {
+                switch lib.pane {
                 case .film: filmPane
                 case .paper: paperPane
                 case .adjust: adjustPane
+                case .crop: cropPane
                 }
             }
             .frame(height: 186)
@@ -47,14 +49,25 @@ struct PanelView: View {
         }
         .background(Color(.secondarySystemBackground), in: UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
         .background(Color(.secondarySystemBackground).ignoresSafeArea(edges: .bottom).padding(.top, 20))
+        .fullScreenCover(isPresented: $collaging) { CollageView(photos: lib.targets) }
+    }
+
+    @ViewBuilder private var cropPane: some View {
+        if let p = lib.current {
+            let size = lib.currentPrint?.size ?? CGSize(width: 3, height: 2)
+            CropPane(crop: Binding(get: { p.crop }, set: { p.crop = $0 }), aspect: size.width / size.height)
+        }
     }
 
     private var selectBar: some View {
         let n = lib.selected.count + 1
         return HStack {
-            Text("已选 \(n) 张 · 修改会同时应用").font(.footnote).foregroundStyle(.secondary)
+            Text("已选 \(n) 张").font(.footnote).foregroundStyle(.secondary)
             Spacer()
             Button("同步") { syncing = true }.disabled(lib.selected.isEmpty)
+            Button("拼图") { collaging = true }
+                .disabled(n < 2 || n > 9 || lib.busy)
+                .padding(.leading, 12)
             Button("导出 \(n) 张") { Task { await lib.export(lib.targets) } }
                 .disabled(lib.busy)
                 .padding(.leading, 12)

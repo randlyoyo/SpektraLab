@@ -1,6 +1,7 @@
 //  Model.swift — films, settings, the photo library and what editing does to it.
 //  Behaviour follows the Flutter design prototype in mobile/.
 
+import CoreImage
 import Foundation
 import Observation
 import PhotosUI
@@ -77,6 +78,7 @@ final class Photo: Identifiable {
     let id: String
     let thumb: UIImage?
     var settings = Settings()
+    var crop = Crop()
     var status = ""
 
     init(id: String, thumb: UIImage?) {
@@ -102,6 +104,32 @@ final class Library {
     var currentOriginal: UIImage?
     var showOriginal = false // the canvas's 原图 button
     var lastCaptured: Photo? // shown when the camera closes
+    var pane = Pane.film
+
+    /// What the canvas shows: the print (or the original, with 原图) cropped.
+    var shownImage: UIImage? {
+        display(showOriginal ? currentOriginal ?? currentPrint : currentPrint, current?.crop ?? Crop(), all: true)
+    }
+
+    /// Under the crop editor's frame: turned and flipped, not yet straightened or cropped.
+    var turnedImage: UIImage? {
+        display(showOriginal ? currentOriginal ?? currentPrint : currentPrint, current?.crop ?? Crop(), all: false)
+    }
+
+    @ObservationIgnored private var displayCache: (key: String, image: UIImage)?
+    @ObservationIgnored private let displayContext = CIContext(options: [.cacheIntermediates: false])
+
+    private func display(_ base: UIImage?, _ crop: Crop, all: Bool) -> UIImage? {
+        guard let base, let ci = CIImage(image: base) else { return nil }
+        if crop == Crop() { return base }
+        let key = "\(ObjectIdentifier(base))|\(crop)|\(all)"
+        if let hit = displayCache, hit.key == key { return hit.image }
+        let out = crop.apply(ci, all: all)
+        guard let cg = displayContext.createCGImage(out, from: out.extent) else { return base }
+        let image = UIImage(cgImage: cg)
+        displayCache = (key, image)
+        return image
+    }
 
     var busy = false
     var exporting: (done: Int, total: Int)?
@@ -243,7 +271,7 @@ final class Library {
             if stopExport { break }
             do {
                 _ = try await Engine.shared.develop(p.id, p.settings, film: true, display: false)
-                try await Engine.shared.save()
+                try await Engine.shared.save(p.crop)
                 saved += 1
             } catch {
                 failed += 1

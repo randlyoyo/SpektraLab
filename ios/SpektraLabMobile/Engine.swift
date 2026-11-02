@@ -70,10 +70,11 @@ struct PickedFile: Transferable {
 struct SharedPrint: Transferable {
     let id: String
     let settings: Settings
+    let crop: Crop
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: .heic) { item in
-            SentTransferredFile(try await Engine.shared.heicFile(item.id, item.settings))
+            SentTransferredFile(try await Engine.shared.heicFile(item.id, item.settings, item.crop))
         }
     }
 }
@@ -232,18 +233,18 @@ actor Engine {
         return original
     }
 
-    /// The full print as Display P3 HEIC, converted once from ProPhoto.
-    private func heic() throws -> Data {
+    /// The full print, cropped, as Display P3 HEIC, converted once from ProPhoto.
+    private func heic(_ crop: Crop) throws -> Data {
         guard let lastPrint,
-              let data = context.heifRepresentation(of: CIImage(cgImage: lastPrint), format: .RGBA8,
+              let data = context.heifRepresentation(of: crop.apply(CIImage(cgImage: lastPrint)), format: .RGBA8,
                                                     colorSpace: Self.displayP3, options: [:])
         else { throw EngineError(errorDescription: "Nothing to save") }
         return data
     }
 
-    /// Save the last print to Photos.
-    func save() async throws {
-        let data = try heic()
+    /// Save the last print, cropped, to Photos.
+    func save(_ crop: Crop) async throws {
+        let data = try heic(crop)
         try await PHPhotoLibrary.shared().performChanges {
             PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil)
         }
@@ -251,15 +252,34 @@ actor Engine {
 
     /// A HEIC file of photo `id` printed with `settings`, for the share sheet.
     /// Reuses the last print when it is exactly that.
-    func heicFile(_ id: String, _ settings: Settings) throws -> URL {
-        if lastPrintKey != "\(id)|\(try json(settings.params))" {
-            _ = try develop(id, settings, film: true, display: false)
-        }
+    func heicFile(_ id: String, _ settings: Settings, _ crop: Crop) throws -> URL {
+        try ensurePrint(id, settings)
         let film = Stock.byID[settings.film]?.name ?? "Print"
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("SpektraLab \(film).heic")
-        try heic().write(to: url, options: .atomic)
+        try heic(crop).write(to: url, options: .atomic)
         return url
+    }
+
+    /// Photo `id` printed with `settings` and cropped, Display P3, scaled to
+    /// `longEdge` when given (the collage's preview) or full size (its export).
+    func croppedPrint(_ id: String, _ settings: Settings, _ crop: Crop, longEdge: Double?) throws -> CGImage {
+        try ensurePrint(id, settings)
+        var image = crop.apply(CIImage(cgImage: lastPrint!))
+        if let longEdge {
+            let s = min(1, longEdge / max(image.extent.width, image.extent.height))
+            image = image.transformed(by: .init(scaleX: s, y: s))
+        }
+        guard let cg = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: Self.displayP3)
+        else { throw EngineError(errorDescription: "Could not crop the print") }
+        return cg
+    }
+
+    /// Make `lastPrint` photo `id` with `settings`, unless it already is.
+    private func ensurePrint(_ id: String, _ settings: Settings) throws {
+        if lastPrintKey != "\(id)|\(try json(settings.params))" {
+            _ = try develop(id, settings, film: true, display: false)
+        }
     }
 
     /// The film and paper of `settings` as a 3D LUT for the camera's live view:

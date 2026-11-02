@@ -7,10 +7,8 @@ struct CanvasView: View {
     @Environment(Library.self) private var lib
     @State private var fullscreen = false
 
-    /// The print, or the original while the 原图 button is on.
-    private var shown: UIImage? {
-        lib.showOriginal ? lib.currentOriginal ?? lib.currentPrint : lib.currentPrint
-    }
+    /// The print, or the original while the 原图 button is on, cropped.
+    private var shown: UIImage? { lib.shownImage }
 
     var body: some View {
         // The photo runs under the navigation bar; the labels over it do not.
@@ -41,7 +39,10 @@ struct CanvasView: View {
     @ViewBuilder private var photo: some View {
         ZStack {
             Color.black
-            if let shown {
+            if lib.pane == .crop, let p = lib.current, let turned = lib.turnedImage {
+                CropEditor(image: turned, crop: Binding(get: { p.crop }, set: { p.crop = $0 }))
+                    .padding(.top, 50) // clear of the navigation bar
+            } else if let shown {
                 ZoomableImage(image: shown, resetOn: lib.currentID) { fullscreen = true }
             } else if let p = lib.current {
                 // The thumbnail under a spinner until the first print lands.
