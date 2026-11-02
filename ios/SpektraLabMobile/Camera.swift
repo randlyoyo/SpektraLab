@@ -47,6 +47,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @ObservationIgnored private var input: AVCaptureDeviceInput?
     @ObservationIgnored private var rotation: AVCaptureDevice.RotationCoordinator?
     @ObservationIgnored private var mirrorPreview = false // the front camera, as a mirror
+    @ObservationIgnored private var portraitAngle: CGFloat = 90
 
     @ObservationIgnored weak var preview: PreviewView?
     @ObservationIgnored var onCapture: (@MainActor (URL) -> Void)?
@@ -152,16 +153,17 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         // the portrait angle. Set after the commit, which rebuilds the connection.
         let rotation = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
         self.rotation = rotation
-        // The system's automatic mirroring of the front camera flips along the
-        // sensor's axis, which with a portrait rotation turned the picture upside
-        // down. Off: 90 degrees for every camera, and the selfie mirror is done
-        // in `captureOutput`, along the right axis.
+        // Portrait is 90 degrees on the back cameras and 270 on the front one,
+        // whose sensor is mounted the other way: 90 left it upside down, on a
+        // device, with or without the system's mirroring. That mirroring is off;
+        // the selfie mirror is done in `captureOutput`, along the screen's axis.
+        portraitAngle = device.position == .front ? 270 : 90
         if let c = videoOutput.connection(with: .video) {
             if c.isVideoMirroringSupported {
                 c.automaticallyAdjustsVideoMirroring = false
                 c.isVideoMirrored = false
             }
-            if c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
+            if c.isVideoRotationAngleSupported(portraitAngle) { c.videoRotationAngle = portraitAngle }
         }
         mirrorPreview = device.position == .front
         let format = photoOutput.isAppleProRAWEnabled ? "ProRAW"
@@ -247,9 +249,9 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         var image = CIImage(cvPixelBuffer: buffer)
         // Backstop: a frame still landscape had the connection's angle not
-        // applied; a quarter turn clockwise stands it up (Core Image is y-up).
+        // applied; turn it by that angle here (clockwise; Core Image is y-up).
         if image.extent.width > image.extent.height {
-            image = image.transformed(by: CGAffineTransform(rotationAngle: -.pi / 2))
+            image = image.transformed(by: CGAffineTransform(rotationAngle: -portraitAngle * .pi / 180))
         }
         if mirrorPreview { image = image.transformed(by: CGAffineTransform(scaleX: -1, y: 1)) }
         image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
