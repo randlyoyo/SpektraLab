@@ -114,9 +114,11 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
         // ProRAW depends on the lens, and can only be switched on with the output in the session.
         photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
-        // The live view is portrait; photos follow how the phone is held (`shoot`).
-        if let c = videoOutput.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
         session.commitConfiguration()
+        // The live view is portrait; photos follow how the phone is held (`shoot`).
+        // After the commit: swapping the input rebuilds the connection there, and
+        // an angle set on the old one is lost (the front camera came up sideways).
+        if let c = videoOutput.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
 
         let rotation = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
         self.rotation = rotation
