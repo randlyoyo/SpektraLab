@@ -1,0 +1,58 @@
+# XcodeGen spec for the iPhone app. Generated, not committed: `xcodegen` here
+# writes SpektraLabMobile.xcodeproj (ios/README.md).
+name: SpektraLabMobile
+options:
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    # Set these two for a signed build (TestFlight); unsigned CI builds ignore them.
+    PRODUCT_BUNDLE_IDENTIFIER: com.example.spektralab-mobile
+    DEVELOPMENT_TEAM: ""
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  SpektraLabMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: SpektraLabMobile
+        excludes: ["Resources/**"]
+      # Folder references: the engine opens `engine/` as a directory.
+      - path: SpektraLabMobile/Resources/engine
+        type: folder
+        buildPhase: resources
+      - path: ../modern_UI/Spektrafilm/Spektrafilm/Resources/Licenses
+        type: folder
+        buildPhase: resources
+      - path: ../modern_UI/Spektrafilm/Spektrafilm/Resources/StockCatalog.json
+        buildPhase: resources
+      # The engine, as the Mac target compiles it (Tools/gen-project.py):
+      # every Mac translation unit, none of the Windows ones.
+      - path: ../engine/src/core
+      - path: ../engine/src/gpu
+        excludes: ["vulkan_gpu.cpp"]
+      - path: ../engine/src/pipeline
+        excludes: ["windows_unported.cpp"]
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: SpektraLab Mobile
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Saves your prints to Photos.
+        SWIFT_OBJC_BRIDGING_HEADER: SpektraLabMobile/Bridging-Header.h
+        CLANG_CXX_LANGUAGE_STANDARD: c++20
+        CLANG_CXX_LIBRARY: libc++
+        GCC_C_LANGUAGE_STANDARD: c11
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/../engine/include
+          - $(SRCROOT)/../engine/src
+          - $(SRCROOT)/../engine/src/core
+          - $(SRCROOT)/../engine/third_party/metal-cpp
+        OTHER_LDFLAGS: -framework Metal -framework QuartzCore -framework CoreText -framework CoreGraphics -framework Accelerate
+        # metal-cpp manages its own retain/release.
+        CLANG_ENABLE_OBJC_ARC: NO
+        # The engine's C++ at -O2 in Debug too, as on the Mac (12x slower at -O0).
+        GCC_OPTIMIZATION_LEVEL: "2"

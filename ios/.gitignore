@@ -1,0 +1,4 @@
+# Generated: `engine/build.sh ios` and `xcodegen` (see ios/README.md).
+SpektraLabMobile/Resources/engine/
+SpektraLabMobile.xcodeproj/
+build/

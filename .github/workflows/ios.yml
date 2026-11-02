@@ -1,0 +1,58 @@
+# The iPhone app, built where there is no Mac: an unsigned .ipa as an artifact.
+# Sign and install it with Sideloadly (free Apple ID, 7 days) or add the
+# TestFlight job once there is a paid developer account (ios/README.md).
+
+name: iOS
+
+on:
+  push:
+    branches: [ios]
+    paths: ["ios/**", "engine/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-26          # arm64; Xcode 26.6 is the image default
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26.6
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+
+      - name: Metal toolchain
+        run: |
+          xcrun -sdk iphoneos metal --version \
+            || xcodebuild -downloadComponent MetalToolchain
+
+      - name: Engine kernels and resources (iphoneos)
+        run: engine/build.sh ios
+
+      - name: Generate the Xcode project
+        working-directory: ios
+        run: brew install xcodegen && xcodegen
+
+      - name: Build (unsigned)
+        working-directory: ios
+        run: |
+          xcodebuild -project SpektraLabMobile.xcodeproj -scheme SpektraLabMobile \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+
+      - name: Package .ipa
+        working-directory: ios
+        run: |
+          mkdir -p build/Payload
+          cp -R build/DerivedData/Build/Products/Release-iphoneos/SpektraLabMobile.app build/Payload/
+          (cd build && zip -qry SpektraLabMobile-unsigned.ipa Payload)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SpektraLabMobile-unsigned-ipa
+          path: ios/build/SpektraLabMobile-unsigned.ipa
+          retention-days: 14
