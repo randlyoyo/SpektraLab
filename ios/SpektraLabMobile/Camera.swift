@@ -46,9 +46,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @ObservationIgnored private var cube: Data?
     @ObservationIgnored private var input: AVCaptureDeviceInput?
     @ObservationIgnored private var rotation: AVCaptureDevice.RotationCoordinator?
-    /// Degrees that stand this camera's frames upright with the phone held
-    /// upright. Not always 90: the front sensor is mounted the other way.
-    @ObservationIgnored private var portraitAngle: CGFloat = 90
+    @ObservationIgnored private var mirrorPreview = false // the front camera, as a mirror
 
     @ObservationIgnored weak var preview: PreviewView?
     @ObservationIgnored var onCapture: (@MainActor (URL) -> Void)?
@@ -86,6 +84,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         session.beginConfiguration()
         session.sessionPreset = .photo
         if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
+        photoOutput.maxPhotoQualityPrioritization = .quality
         videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.setSampleBufferDelegate(self, queue: videoQueue)
@@ -153,11 +152,18 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         // the portrait angle. Set after the commit, which rebuilds the connection.
         let rotation = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
         self.rotation = rotation
-        let held = rotation.videoRotationAngleForHorizonLevelCapture
-        if held == 90 || held == 270 { portraitAngle = held }
-        if let c = videoOutput.connection(with: .video), c.isVideoRotationAngleSupported(portraitAngle) {
-            c.videoRotationAngle = portraitAngle
+        // The system's automatic mirroring of the front camera flips along the
+        // sensor's axis, which with a portrait rotation turned the picture upside
+        // down. Off: 90 degrees for every camera, and the selfie mirror is done
+        // in `captureOutput`, along the right axis.
+        if let c = videoOutput.connection(with: .video) {
+            if c.isVideoMirroringSupported {
+                c.automaticallyAdjustsVideoMirroring = false
+                c.isVideoMirrored = false
+            }
+            if c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
         }
+        mirrorPreview = device.position == .front
         let format = photoOutput.isAppleProRAWEnabled ? "ProRAW"
             : photoOutput.availableRawPhotoPixelFormatTypes.isEmpty ? "HEIC" : "RAW"
         let flashModes = photoOutput.supportedFlashModes
@@ -241,12 +247,12 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         var image = CIImage(cvPixelBuffer: buffer)
         // Backstop: a frame still landscape had the connection's angle not
-        // applied; turn it upright here. The same way when mirrored: turning it
-        // the other way put the front camera upside down.
+        // applied; a quarter turn clockwise stands it up (Core Image is y-up).
         if image.extent.width > image.extent.height {
-            image = image.transformed(by: CGAffineTransform(rotationAngle: -portraitAngle * .pi / 180))
-            image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+            image = image.transformed(by: CGAffineTransform(rotationAngle: -.pi / 2))
         }
+        if mirrorPreview { image = image.transformed(by: CGAffineTransform(scaleX: -1, y: 1)) }
+        image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
         lock.lock(); let cube = cube; lock.unlock()
         if let cube {
             let filter = CIFilter.colorCubeWithColorSpace()
@@ -275,6 +281,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             let settings = raw.map { AVCapturePhotoSettings(rawPixelFormatType: $0) }
                 ?? AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
             if self.photoOutput.supportedFlashModes.contains(flash) { settings.flashMode = flash }
+            // As the Camera app: the most multi-frame fusion (Smart HDR, Deep Fusion) the format allows.
+            settings.photoQualityPrioritization = .quality
             self.photoOutput.capturePhoto(with: settings, delegate: self)
         }
     }
