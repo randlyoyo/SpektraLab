@@ -32,6 +32,9 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @ObservationIgnored private var cube: Data?
     @ObservationIgnored private var input: AVCaptureDeviceInput?
     @ObservationIgnored private var rotation: AVCaptureDevice.RotationCoordinator?
+    /// Degrees that stand this camera's frames upright with the phone held
+    /// upright. Not always 90: the front sensor is mounted the other way.
+    @ObservationIgnored private var portraitAngle: CGFloat = 90
 
     @ObservationIgnored weak var preview: PreviewView?
     @ObservationIgnored var onCapture: (@MainActor (URL) -> Void)?
@@ -115,13 +118,18 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         // ProRAW depends on the lens, and can only be switched on with the output in the session.
         photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
         session.commitConfiguration()
-        // The live view is portrait; photos follow how the phone is held (`shoot`).
-        // After the commit: swapping the input rebuilds the connection there, and
-        // an angle set on the old one is lost (the front camera came up sideways).
-        if let c = videoOutput.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
 
+        // The live view is portrait; photos follow how the phone is held (`shoot`).
+        // The coordinator knows this camera's mounting; read with the phone
+        // upright (as it is when the camera is switched), its capture angle is
+        // the portrait angle. Set after the commit, which rebuilds the connection.
         let rotation = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
         self.rotation = rotation
+        let held = rotation.videoRotationAngleForHorizonLevelCapture
+        if held == 90 || held == 270 { portraitAngle = held }
+        if let c = videoOutput.connection(with: .video), c.isVideoRotationAngleSupported(portraitAngle) {
+            c.videoRotationAngle = portraitAngle
+        }
         let format = photoOutput.isAppleProRAWEnabled ? "ProRAW"
             : photoOutput.availableRawPhotoPixelFormatTypes.isEmpty ? "HEIC" : "RAW"
         let flashModes = photoOutput.supportedFlashModes
@@ -186,6 +194,13 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         var image = CIImage(cvPixelBuffer: buffer)
+        // Backstop: a frame still landscape had the connection's angle not
+        // applied; turn it upright here (the other way when mirrored).
+        if image.extent.width > image.extent.height {
+            let degrees = connection.isVideoMirrored ? -portraitAngle : portraitAngle
+            image = image.transformed(by: CGAffineTransform(rotationAngle: -degrees * .pi / 180))
+            image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+        }
         lock.lock(); let cube = cube; lock.unlock()
         if let cube {
             let filter = CIFilter.colorCubeWithColorSpace()
@@ -399,13 +414,27 @@ struct CameraView: View {
         .aspectRatio(3 / 4, contentMode: .fit)
         .overlay(alignment: .top) {
             HStack {
-                VStack(spacing: 0) {
-                    Text(Stock.byID[settings.film]?.name ?? "").font(.caption.weight(.semibold))
-                    Text(settings.isPositive ? "反转片 · 直接扫描" : Stock.byID[settings.paper]?.name ?? "")
-                        .font(.caption2).foregroundStyle(.secondary)
+                // Film and paper; tap to change the paper.
+                Menu {
+                    Picker("相纸", selection: $settings.paper) {
+                        ForEach(Stock.papers) { Text($0.name).tag($0.id) }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(Stock.byID[settings.film]?.name ?? "").font(.caption.weight(.semibold))
+                            Text(settings.isPositive ? "反转片 · 直接扫描" : Stock.byID[settings.paper]?.name ?? "")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        if !settings.isPositive {
+                            Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .glass(in: Capsule())
                 }
-                .padding(.horizontal, 12).padding(.vertical, 5)
-                .glass(in: Capsule())
+                .disabled(settings.isPositive)
                 if baking { ProgressView().controlSize(.small) }
                 Spacer()
                 if !camera.format.isEmpty {
@@ -460,21 +489,6 @@ struct CameraView: View {
 
     private var bottomBar: some View {
         HStack {
-            Menu {
-                Picker("相纸", selection: $settings.paper) {
-                    ForEach(Stock.papers) { Text($0.name).tag($0.id) }
-                }
-            } label: { icon("doc.plaintext", size: 52) }
-            .disabled(settings.isPositive)
-            Button { camera.flipCamera() } label: { icon("arrow.triangle.2.circlepath.camera", size: 52) }
-            Spacer()
-            Button(action: shutter) {
-                Circle().fill(.white).frame(width: 66, height: 66)
-                    .padding(5).overlay(Circle().stroke(.white, lineWidth: 3))
-            }
-            .disabled(error != nil || countdown > 0)
-            Spacer()
-            Color.clear.frame(width: 52, height: 52)
             // The last shot: tap to go and edit it.
             Button { dismiss() } label: {
                 Image(uiImage: lastShot ?? UIImage())
@@ -485,8 +499,16 @@ struct CameraView: View {
             }
             .opacity(lastShot == nil ? 0 : 1)
             .disabled(lastShot == nil)
+            Spacer()
+            Button(action: shutter) {
+                Circle().fill(.white).frame(width: 66, height: 66)
+                    .padding(5).overlay(Circle().stroke(.white, lineWidth: 3))
+            }
+            .disabled(error != nil || countdown > 0)
+            Spacer()
+            Button { camera.flipCamera() } label: { icon("arrow.triangle.2.circlepath.camera", size: 52) }
         }
-        .padding(.horizontal, 20).padding(.vertical, 16)
+        .padding(.horizontal, 28).padding(.vertical, 16)
     }
 
     private var thirds: some View {
