@@ -33,10 +33,6 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
     }
 
-    /// The front camera's two framings, as the Camera app: a slightly
-    /// cropped default, and the whole sensor.
-    static let frontCroppedZoom: CGFloat = 1.2
-
     @ObservationIgnored let session = AVCaptureSession()
     @ObservationIgnored private let photoOutput = AVCapturePhotoOutput()
     @ObservationIgnored private let videoOutput = AVCaptureVideoDataOutput()
@@ -46,8 +42,6 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @ObservationIgnored private var cube: Data?
     @ObservationIgnored private var input: AVCaptureDeviceInput?
     @ObservationIgnored private var rotation: AVCaptureDevice.RotationCoordinator?
-    @ObservationIgnored private var mirrorPreview = false // the front camera, as a mirror
-    @ObservationIgnored private var portraitAngle: CGFloat = 90
 
     @ObservationIgnored weak var preview: PreviewView?
     @ObservationIgnored var onCapture: (@MainActor (URL) -> Void)?
@@ -56,8 +50,6 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private(set) var format = "" // "ProRAW", "RAW" or "HEIC" for the current lens
     private(set) var lenses: [Lens] = [] // the back lenses, widest first
     private(set) var lensID = ""
-    private(set) var frontWide = false
-    private(set) var front = false
     private(set) var flashModes: [AVCaptureDevice.FlashMode] = []
     private(set) var biasRange: ClosedRange<Float> = -2...2
     var flash = AVCaptureDevice.FlashMode.off
@@ -153,19 +145,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         // the portrait angle. Set after the commit, which rebuilds the connection.
         let rotation = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
         self.rotation = rotation
-        // Portrait is 90 degrees on the back cameras and 270 on the front one,
-        // whose sensor is mounted the other way: 90 left it upside down, on a
-        // device, with or without the system's mirroring. That mirroring is off;
-        // the selfie mirror is done in `captureOutput`, along the screen's axis.
-        portraitAngle = device.position == .front ? 270 : 90
-        if let c = videoOutput.connection(with: .video) {
-            if c.isVideoMirroringSupported {
-                c.automaticallyAdjustsVideoMirroring = false
-                c.isVideoMirrored = false
-            }
-            if c.isVideoRotationAngleSupported(portraitAngle) { c.videoRotationAngle = portraitAngle }
-        }
-        mirrorPreview = device.position == .front
+        if let c = videoOutput.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
         let format = photoOutput.isAppleProRAWEnabled ? "ProRAW"
             : photoOutput.availableRawPhotoPixelFormatTypes.isEmpty ? "HEIC" : "RAW"
         let flashModes = photoOutput.supportedFlashModes
@@ -173,7 +153,6 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         DispatchQueue.main.async {
             self.format = format
             self.lensID = lens.id
-            self.front = device.position == .front
             self.flashModes = flashModes
             if !flashModes.contains(self.flash) { self.flash = .off }
             self.biasRange = max(range.lowerBound, -2)...min(range.upperBound, 2)
@@ -190,35 +169,13 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         sessionQueue.async { self.use(lens) }
     }
 
-    func flipCamera() {
-        let toFront = !front
-        let wide = frontWide
-        sessionQueue.async {
-            if toFront {
-                guard let d = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else { return }
-                self.use(Lens(id: d.uniqueID, factor: 1, device: d, zoom: wide ? 1 : Self.frontCroppedZoom))
-            } else if let main = self.lenses.first(where: { $0.factor == 1 }) ?? self.lenses.first {
-                self.use(main)
-            }
-        }
-    }
-
-    /// The front camera's framing toggle: whole sensor, or the cropped default.
-    func toggleFrontWide() {
-        frontWide.toggle()
-        let wide = frontWide
-        sessionQueue.async {
-            if let d = self.input?.device, d.position == .front { self.zoom(d, to: wide ? 1 : Self.frontCroppedZoom) }
-        }
-    }
-
     /// Focus and meter at `point`, normalised in the portrait live view.
     func focus(at point: CGPoint) {
         sessionQueue.async {
             guard let device = self.input?.device, (try? device.lockForConfiguration()) != nil else { return }
             defer { device.unlockForConfiguration() }
-            // The sensor is landscape: portrait (x, y) is sensor (y, 1 - x), or (y, x) mirrored on the front.
-            let p = CGPoint(x: point.y, y: device.position == .front ? point.x : 1 - point.x)
+            // The sensor is landscape: portrait (x, y) is sensor (y, 1 - x).
+            let p = CGPoint(x: point.y, y: 1 - point.x)
             if device.isFocusPointOfInterestSupported, device.isFocusModeSupported(.autoFocus) {
                 device.focusPointOfInterest = p
                 device.focusMode = .autoFocus
@@ -249,11 +206,10 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         var image = CIImage(cvPixelBuffer: buffer)
         // Backstop: a frame still landscape had the connection's angle not
-        // applied; turn it by that angle here (clockwise; Core Image is y-up).
+        // applied; a quarter turn clockwise stands it up (Core Image is y-up).
         if image.extent.width > image.extent.height {
-            image = image.transformed(by: CGAffineTransform(rotationAngle: -portraitAngle * .pi / 180))
+            image = image.transformed(by: CGAffineTransform(rotationAngle: -.pi / 2))
         }
-        if mirrorPreview { image = image.transformed(by: CGAffineTransform(scaleX: -1, y: 1)) }
         image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
         lock.lock(); let cube = cube; lock.unlock()
         if let cube {
@@ -513,30 +469,19 @@ struct CameraView: View {
                     .glass(in: Capsule())
                     .padding(.horizontal, 40)
                 }
-                if camera.front {
-                    // As the Camera app: the arrows widen to the whole sensor and back.
-                    Button { camera.toggleFrontWide() } label: {
-                        Image(systemName: camera.frontWide ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(camera.frontWide ? amber : .white)
-                            .frame(width: 38, height: 38)
-                    }
-                    .glass(in: Circle())
-                } else {
-                    HStack(spacing: 2) {
-                        ForEach(camera.lenses) { lens in
-                            Button { camera.selectLens(lens) } label: {
-                                Text(lens.label)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(lens.id == camera.lensID ? amber : .white)
-                                    .frame(width: 36, height: 38)
-                            }
+                HStack(spacing: 2) {
+                    ForEach(camera.lenses) { lens in
+                        Button { camera.selectLens(lens) } label: {
+                            Text(lens.label)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(lens.id == camera.lensID ? amber : .white)
+                                .frame(width: 36, height: 38)
                         }
                     }
-                    .padding(.horizontal, 4)
-                    .glass(in: Capsule())
-                    .opacity(camera.lenses.count > 1 ? 1 : 0)
                 }
+                .padding(.horizontal, 4)
+                .glass(in: Capsule())
+                .opacity(camera.lenses.count > 1 ? 1 : 0)
             }
             .padding(.bottom, 10)
         }
@@ -571,7 +516,7 @@ struct CameraView: View {
             }
             .disabled(error != nil || countdown > 0)
             Spacer()
-            Button { camera.flipCamera() } label: { icon("arrow.triangle.2.circlepath.camera", size: 52) }
+            Color.clear.frame(width: 52, height: 52) // balances the last shot
         }
         .padding(.horizontal, 28).padding(.vertical, 16)
     }
