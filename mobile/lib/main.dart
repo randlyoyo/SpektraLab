@@ -3,6 +3,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'collage.dart';
+import 'crop.dart';
 import 'engine.dart';
 import 'photo.dart';
 import 'stocks.dart';
@@ -40,7 +42,7 @@ class App extends StatelessWidget {
   }
 }
 
-enum Pane { film, paper, adjust }
+enum Pane { film, paper, adjust, crop }
 
 class Editor extends StatefulWidget {
   const Editor({super.key});
@@ -88,6 +90,8 @@ class _EditorState extends State<Editor> {
     try {
       final r = p.id == openId ? await Engine.render(s.params, film: film) : await Engine.open(p.id, s.params);
       openId = p.id;
+      final img = await decodeImageFromList(r.image);
+      p.aspect = img.width / img.height;
       p
         ..print = r.image
         ..original = r.original ?? p.original
@@ -399,16 +403,24 @@ class _EditorState extends State<Editor> {
     final top = MediaQuery.paddingOf(context).top + 60;
 
     return Stack(fit: StackFit.expand, children: [
-      // Tap for full screen.
-      GestureDetector(
+      if (pane == Pane.crop)
+        CropEditor(
+          image: shown,
+          aspect: p.aspect,
+          crop: p.crop,
+          onChanged: (c) => setState(() => p.crop = c),
+        )
+      else
+        // Tap for full screen.
+        GestureDetector(
         onTap: () => Navigator.of(context).push(PageRouteBuilder(
           opaque: true,
-          pageBuilder: (_, __, ___) => _Fullscreen(shown),
+          pageBuilder: (_, __, ___) => _Fullscreen(Cropped(image: shown, aspect: p.aspect, crop: p.crop)),
           transitionsBuilder: (_, a, __, child) => FadeTransition(opacity: a, child: child),
         )),
         child: InteractiveViewer(
           maxScale: 6,
-          child: Image.memory(shown, fit: BoxFit.contain, gaplessPlayback: true),
+          child: Cropped(image: shown, aspect: p.aspect, crop: p.crop),
         ),
       ),
       if (showOriginal && original != null) Positioned(left: 12, top: top, child: _chip('原图', highlight: true)),
@@ -526,7 +538,7 @@ class _EditorState extends State<Editor> {
           child: SizedBox(
             width: double.infinity,
             child: Segmented<Pane>(
-              items: const {Pane.film: '胶片', Pane.paper: '相纸', Pane.adjust: '调整'},
+              items: const {Pane.film: '胶片', Pane.paper: '相纸', Pane.adjust: '调整', Pane.crop: '裁剪'},
               value: pane,
               onChanged: (v) => setState(() => pane = v),
             ),
@@ -542,6 +554,11 @@ class _EditorState extends State<Editor> {
                 Pane.film => _filmPane(),
                 Pane.paper => _paperPane(),
                 Pane.adjust => _adjustPane(),
+                Pane.crop => CropPane(
+                    crop: current?.crop ?? const Crop(),
+                    aspect: current?.aspect ?? 1.5,
+                    onChanged: (c) => setState(() => current!.crop = c),
+                  ),
               },
             ),
           ),
@@ -550,19 +567,31 @@ class _EditorState extends State<Editor> {
     );
   }
 
+  Future<void> _collage() async {
+    final done = await Navigator.of(context).push<String>(
+      CupertinoPageRoute(fullscreenDialog: true, builder: (_) => CollageScreen(photos: targets)),
+    );
+    if (done != null) _toast(done);
+  }
+
   Widget _selectBar() {
     final n = selected.length + 1;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 6, 8, 0),
       child: Row(children: [
         Expanded(
-          child: Text('已选 $n 张 · 修改会同时应用',
+          child: Text('已选 $n 张',
               style: const TextStyle(fontSize: 13, color: kSecondaryLabel)),
         ),
         CupertinoButton(
           padding: const EdgeInsets.symmetric(horizontal: 10),
           onPressed: selected.isEmpty ? null : _syncSheet,
           child: const Text('同步', style: TextStyle(fontSize: 15)),
+        ),
+        CupertinoButton(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          onPressed: n < 2 || n > 9 || busy ? null : _collage,
+          child: const Text('拼图', style: TextStyle(fontSize: 15)),
         ),
         CupertinoButton(
           padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -690,7 +719,7 @@ class _EditorState extends State<Editor> {
 
 /// The photo alone on black. Tap to close; double-tap to zoom.
 class _Fullscreen extends StatefulWidget {
-  final Uint8List image;
+  final Widget image;
   const _Fullscreen(this.image);
 
   @override
@@ -719,7 +748,7 @@ class _FullscreenState extends State<_Fullscreen> {
         child: InteractiveViewer(
           transformationController: _zoom,
           maxScale: 6,
-          child: SizedBox.expand(child: Image.memory(widget.image, fit: BoxFit.contain)),
+          child: SizedBox.expand(child: widget.image),
         ),
       ),
     );

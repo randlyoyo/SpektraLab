@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import 'crop.dart';
 import 'stocks.dart';
 
 /// What can be synced from one photo to others, as the Mac app's clipboard groups.
@@ -72,6 +73,9 @@ class Photo {
   /// The settings [print] was made with; differs from [settings] after a sync
   /// to a photo that has not been opened since.
   Settings? printed;
+
+  Crop crop = const Crop();
+  double aspect = 1.5; // width / height of the uncropped photo
 
   Photo(this.id, this.thumb);
 
